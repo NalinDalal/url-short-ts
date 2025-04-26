@@ -1,0 +1,20 @@
+{
+  "name": "url-short-ts",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "nanoid": "^5.1.5",
+    "redis": "^4.7.0"
+  }
+}
