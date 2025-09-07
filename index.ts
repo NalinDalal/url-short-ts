@@ -29,97 +29,163 @@ function getRedisClient(key: string): RedisClientType {
   return redisClients[hash % redisClients.length];
 }
 
-// Handle requests with the Bun server
+// --- OpenAPI spec ---
+const openApiSpec = {
+  openapi: "3.0.0",
+  info: {
+    title: "URL Shortener API",
+    version: "1.0.0",
+  },
+  servers: [{ url: `http://localhost:${PORT}` }],
+  paths: {
+    "/shorten": {
+      post: {
+        summary: "Shorten a long URL",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  url: { type: "string", example: "https://example.com" },
+                  ttl: { type: "integer", example: 3600 },
+                },
+                required: ["url"],
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Shortened URL",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    shortUrl: {
+                      type: "string",
+                      example: "http://localhost:3000/abc123",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/{shortId}": {
+      get: {
+        summary: "Redirect to the original URL",
+        parameters: [
+          {
+            name: "shortId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "302": { description: "Redirects to original URL" },
+          "404": { description: "Short URL not found" },
+        },
+      },
+      delete: {
+        summary: "Delete a short URL",
+        parameters: [
+          {
+            name: "shortId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": { description: "Short URL deleted" },
+          "404": { description: "Short URL not found" },
+        },
+      },
+    },
+  },
+};
+
+// --- Bun server ---
 serve({
   port: PORT,
   fetch: async (req) => {
     const url = new URL(req.url);
 
-    // Root Endpoint: Display API documentation
-    if (req.method === "GET" && url.pathname === "/") {
+    // Serve Swagger UI
+    if (req.method === "GET" && url.pathname === "/docs") {
       const html = `
         <!DOCTYPE html>
-        <html lang="en">
+        <html>
           <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <title>URL Shortener API</title>
-            <style>
-              body {
-                font-family: system-ui, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                background: #f7fafc;
-                margin: 0;
-              }
-              .container {
-                text-align: center;
-                padding: 2rem;
-                border-radius: 12px;
-                background: white;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-              }
-              h1 {
-                font-size: 2rem;
-                margin-bottom: 1rem;
-              }
-              p {
-                margin: 0.5rem 0;
-              }
-              code {
-                background: #edf2f7;
-                padding: 0.2rem 0.4rem;
-                border-radius: 4px;
-                font-size: 0.95rem;
-              }
-            </style>
+            <title>Swagger Docs</title>
+            <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css" />
           </head>
           <body>
-            <div class="container">
-              <h1>🚀 Welcome to the URL Shortener API!</h1>
-              <p>Use <code>POST /shorten</code> with JSON body:</p>
-              <p><code>{ "url": "https://example.com", "ttl": 3600 }</code></p>
-              <p>Then access your shortened URL via <code>GET /:shortId</code></p>
-            </div>
+            <div id="swagger-ui"></div>
+            <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
+            <script>
+              SwaggerUIBundle({
+                url: '/openapi.json',
+                dom_id: '#swagger-ui'
+              });
+            </script>
           </body>
         </html>
       `;
-      return new Response(html, {
-        headers: {
-          "Content-Type": "text/html",
-        },
-      });
+      return new Response(html, { headers: { "Content-Type": "text/html" } });
     }
 
-    // Shorten URL: POST /shorten
+    // Serve OpenAPI spec
+    if (req.method === "GET" && url.pathname === "/openapi.json") {
+      return Response.json(openApiSpec);
+    }
+
+    // Root endpoint
+    if (req.method === "GET" && url.pathname === "/") {
+      return new Response(
+        `<h1>🚀 URL Shortener API</h1><p>See <a href="/docs">/docs</a> for Swagger UI</p>`,
+        { headers: { "Content-Type": "text/html" } },
+      );
+    }
+
+    // Shorten URL
     if (req.method === "POST" && url.pathname === "/shorten") {
       try {
         const body = await req.json();
         const { url: originalUrl, ttl } = body;
 
         if (!originalUrl) {
-          return new Response("URL is required", { status: 400 });
+          return new Response(JSON.stringify({ error: "URL is required" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          });
         }
 
-        const shortId = nanoid(8); // short 8-char ID
+        const shortId = nanoid(8);
         const redisClient = getRedisClient(shortId);
 
         await redisClient.set(shortId, originalUrl, {
-          EX: ttl || 3600, // Default TTL of 1 hour
+          EX: ttl || 3600,
         });
 
         return Response.json({
           shortUrl: `http://localhost:${PORT}/${shortId}`,
         });
-      } catch (err) {
-        console.error(err);
-        return new Response("Invalid request", { status: 400 });
+      } catch {
+        return new Response(JSON.stringify({ error: "Invalid request" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
       }
     }
 
-    // Redirect: GET /:shortId
+    // Redirect
     if (req.method === "GET" && url.pathname.length > 1) {
       const shortId = url.pathname.slice(1);
       const redisClient = getRedisClient(shortId);
@@ -132,9 +198,35 @@ serve({
       return Response.redirect(originalUrl, 302);
     }
 
-    // Fallback: Handle not found
+    // Delete
+    if (req.method === "DELETE" && url.pathname.length > 1) {
+      const shortId = url.pathname.slice(1);
+      const redisClient = getRedisClient(shortId);
+
+      const deleted = await redisClient.del(shortId);
+
+      if (deleted === 0) {
+        return new Response(
+          JSON.stringify({ message: "Short URL not found" }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ message: "Short URL deleted successfully" }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    // Fallback
     return new Response("Not found", { status: 404 });
   },
 });
 
 console.log(`🚀 Server running on http://localhost:${PORT}`);
+console.log(`📖 Swagger docs at http://localhost:${PORT}/docs`);
